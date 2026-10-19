@@ -9,3 +9,4 @@ desktop/app/
 desktop/icon.iconset/
 # stale copy of the game inside desktop/ (the build copies ../index.html into desktop/app/)
 desktop/index.html
+desktop/rel/
