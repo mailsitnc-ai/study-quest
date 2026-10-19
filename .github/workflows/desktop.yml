@@ -1,0 +1,62 @@
+# Builds the Study Quest desktop app for Windows, macOS and Linux and attaches the downloads to a GitHub Release.
+# Runs when a version tag is pushed (e.g. v1.0.1), or by hand from the Actions tab.
+name: Desktop builds
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, platform: win32,  arch: x64,   file: Study-Quest-Windows-x64.zip }
+          - { os: macos-latest,   platform: darwin, arch: arm64, file: Study-Quest-Mac-AppleSilicon.zip }
+          - { os: macos-latest,   platform: darwin, arch: x64,   file: Study-Quest-Mac-Intel.zip }
+          - { os: ubuntu-latest,  platform: linux,  arch: x64,   file: Study-Quest-Linux-x64.tar.gz }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run sync
+      - run: node scripts/package.js ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: Zip (Windows)
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/Study Quest-win32-x64" -DestinationPath "${{ matrix.file }}"
+      - name: Sign ad-hoc and zip (macOS)
+        if: matrix.platform == 'darwin'
+        run: |
+          codesign --force --deep -s - "dist/Study Quest-darwin-${{ matrix.arch }}/Study Quest.app"
+          ditto -c -k --keepParent "dist/Study Quest-darwin-${{ matrix.arch }}/Study Quest.app" "${{ matrix.file }}"
+      - name: Pack (Linux)
+        if: matrix.platform == 'linux'
+        run: tar -czf "${{ matrix.file }}" -C dist "Study Quest-linux-x64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.file }}
+          path: desktop/${{ matrix.file }}
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          body: |
+            **Easiest:** use the web version — no download: see the README.
+            Downloads: Windows (.zip), Mac Apple Silicon / Intel (.zip), Linux (.tar.gz). First launch: see "Opening it the first time" in the README.
