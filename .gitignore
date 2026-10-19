@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+# local backups of the game file
+*.bak-*
+# desktop build output and dependencies
+desktop/node_modules/
+desktop/dist/
+desktop/app/
+desktop/icon.iconset/
+# stale copy of the game inside desktop/ (the build copies ../index.html into desktop/app/)
+desktop/index.html

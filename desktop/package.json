@@ -1,0 +1,22 @@
+{
+  "name": "study-quest",
+  "productName": "Study Quest",
+  "version": "1.0.0",
+  "description": "Study Quest \u2014 turn your notes into an RPG and prep for exams and summatives.",
+  "main": "main.js",
+  "private": true,
+  "author": "Study Quest",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.7.0"
+  },
+  "scripts": {
+    "sync": "node scripts/sync.js",
+    "start": "npm run sync && electron .",
+    "build": "npm run sync && node scripts/package.js",
+    "build:win": "npm run sync && node scripts/package.js win32 x64",
+    "build:mac": "npm run sync && node scripts/package.js darwin",
+    "build:linux": "npm run sync && node scripts/package.js linux x64"
+  }
+}
