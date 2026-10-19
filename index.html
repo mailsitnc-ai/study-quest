@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="sq-version" content="1.0.4">
+<meta name="sq-version" content="1.0.5">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Study Quest — Exam Prep RPG</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -499,6 +499,17 @@ body.fx-calm .vs-l,body.fx-calm .vs-r,body.fx-calm .vs-mid{animation-duration:.2
 
 .chip.upg{border-color:#b9a3ff;color:#d8c8ff;animation:pulse2 2s infinite}.chip.upg .ic{animation:spinu 2.6s linear infinite}@keyframes spinu{to{transform:rotate(360deg)}}
 body.fx-calm .chip.upg,body.fx-calm .chip.upg .ic{animation:none}
+.frac{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle;margin:0 .15em;line-height:1.15;font-size:.92em}
+.frac .fn{border-bottom:1.5px solid currentColor;padding:0 .3em .05em;min-width:1.1em;text-align:center;outline:none}
+.frac .fd{padding:.05em .3em 0;min-width:1.1em;text-align:center;outline:none}
+.frac .fn:empty::before,.frac .fd:empty::before{content:"□";opacity:.45}
+.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:8px}
+.media-grid .mi{position:relative;border-radius:12px;overflow:hidden;background:#0b0b22;border:1px solid #ffffff22;cursor:zoom-in}
+.media-grid .mi img{width:100%;height:120px;object-fit:contain;background:#fff;display:block}
+.media-grid .mi .mc{font-size:10px;padding:4px 6px;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.media-grid .mi .pin{position:absolute;top:6px;right:6px;padding:2px 7px;border-radius:8px;background:#000a;border:1px solid #fff4;font-size:12px;cursor:pointer}
+.media-vids{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-top:8px}
+.media-vids video{width:100%;border-radius:12px;background:#000}
 .chip.upg .upgx{margin-left:6px;padding:0 5px;border-radius:6px;opacity:.75;cursor:pointer}.chip.upg .upgx:hover{opacity:1;background:#ffffff22}
 
 /* ===================== rich editor, handouts, tables ===================== */
@@ -3274,6 +3285,59 @@ Reply ONLY with JSON: {"level":0,"band":"5-6","strands":[{"strand":"3-6 word nam
     catch(e){if(e.message===CANCEL_MSG)break}}
   return null
 }
+/* ---------- videos & diagrams from the web (Wikimedia Commons: free, no key, plays inside the app) ----------
+   Every spellbook gets a study-media panel: pick a topic (from its notebooks) or search, and get real diagrams
+   and short videos with their licence credit; pin the good ones; one tap opens a YouTube search too. */
+const COMMONS="https://commons.wikimedia.org/w/api.php";
+async function commonsSearch(q,kind){
+  const search=kind==="video"?`${q} filetype:video`:`${q} filetype:bitmap|drawing`;
+  const u=`${COMMONS}?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=${kind==="video"?8:16}&gsrsearch=${encodeURIComponent(search)}&prop=imageinfo&iiprop=url|mime|extmetadata|size&iiurlwidth=420`;
+  const r=await fetch(u);if(!r.ok)throw new Error("HTTP "+r.status);const j=await r.json();
+  const strip=h=>String(h||"").replace(/<[^>]*>/g,"").trim();
+  return Object.values((j.query||{}).pages||{}).sort((a,b)=>(a.index||0)-(b.index||0)).map(pg=>{const ii=(pg.imageinfo||[])[0]||{},md=ii.extmetadata||{},title=String(pg.title||"").replace(/^File:/,"");
+    let url=String(ii.url||"").split("?")[0];if(kind==="video"&&/\.ogv$/i.test(url)){const f=url.split("/").pop();url=url.replace("/wikipedia/commons/","/wikipedia/commons/transcoded/")+"/"+f+".480p.vp9.webm"}
+    return{kind,title:title.replace(/\.[a-z0-9]+$/i,"").replace(/_/g," "),url,thumb:String(ii.thumburl||ii.url||"").split("?")[0],page:ii.descriptionurl||"",credit:[strip(md.Artist&&md.Artist.value),strip(md.LicenseShortName&&md.LicenseShortName.value)].filter(Boolean).join(" · ").slice(0,120),mime:ii.mime||""}})
+   .filter(x=>x.url&&(kind==="video"?/^video\//.test(x.mime):/^image\//.test(x.mime)&&!/\.(tiff?|pdf|djvu)$/i.test(x.url)))
+}
+function mediaTopics(nb){
+  const cnt={};const add=t=>{t=String(t||"").trim();if(t&&t.length<60&&!/^from paper review$/i.test(t))cnt[t]=(cnt[t]||0)+1};
+  for(const n of (nb.links||[]).map(id=>NBS().find(x=>x.id===id)).filter(Boolean).concat([nb])){(n.cards||[]).forEach(c=>add(c.topic));(n.manual||[]).forEach(c=>add(c.topic))}
+  return Object.entries(cnt).sort((a,b)=>b[1]-a[1]).map(([t])=>t).slice(0,14)
+}
+let MEDIA={id:null,q:"",img:[],vid:[],busy:false,err:""};
+async function mediaFind(id,q){
+  q=String(q||"").trim();if(!q)return toast("Type a topic to search");
+  MEDIA={id,q,img:[],vid:[],busy:true,err:""};mediaRender(id);
+  try{let[img,vid,plain]=await Promise.all([commonsSearch(q+" diagram","image").catch(()=>[]),commonsSearch(q,"video").catch(()=>[]),commonsSearch(q,"image").catch(()=>[])]);
+    const seen=new Set(img.map(x=>x.url));img=img.concat(plain.filter(x=>!seen.has(x.url)));
+    const lang=x=>/[-_ ](?!en$)[a-z]{2,3}(-[a-z]+)?$/i.test(x.title.trim());if(img.filter(x=>!lang(x)).length>=6)img=img.filter(x=>!lang(x));img=img.slice(0,20);MEDIA.img=img;MEDIA.vid=vid;if(!img.length&&!vid.length)MEDIA.err="Nothing found — try a simpler or more general topic (e.g. 'photosynthesis', 'separation of powers')."}
+  catch(e){MEDIA.err="Couldn't reach Wikimedia Commons — are you online?"}
+  MEDIA.busy=false;mediaRender(id)
+}
+function mediaPin(id,kind,i){const it=(kind==="video"?MEDIA.vid:MEDIA.img)[i];if(!it)return;const all=NBS(),nb=all.find(d=>d.id===id);if(!nb)return;nb.media=nb.media||[];
+  if(nb.media.some(m=>m.url===it.url))return toast("Already pinned");nb.media.unshift({...it,topic:MEDIA.q,at:Date.now()});nb.media=nb.media.slice(0,60);saveNBS(all);toast("📌 Pinned to this spellbook");mediaRender(id)}
+function mediaUnpin(id,i){const all=NBS(),nb=all.find(d=>d.id===id);if(!nb||!nb.media)return;nb.media.splice(i,1);saveNBS(all);mediaRender(id)}
+function mediaView(src,title,credit,page){const e=document.createElement("div");e.style.cssText="position:fixed;inset:0;background:#000d;z-index:45;display:grid;place-items:center;padding:20px;cursor:zoom-out";
+  e.innerHTML=`<div style="max-width:92vw;text-align:center"><img src="${esc(src)}" style="max-width:92vw;max-height:80vh;background:#fff;border-radius:12px"><div style="margin-top:8px"><b>${esc(title)}</b><div class="mu" style="font-size:12px">${esc(credit||"")} ${page?`· <a href="${esc(page)}" target="_blank" onclick="event.stopPropagation()">source</a>`:""}</div></div></div>`;
+  e.onclick=()=>e.remove();document.body.appendChild(e)}
+const ytSearch=(nb,q)=>`https://www.youtube.com/results?search_query=${encodeURIComponent(q+" "+(((FW[nb.fw]||{}).n||"").replace(/^MYP\s*/,""))+" explained")}`;
+function mediaCards(id,list,kind,pinned){
+  if(kind==="video")return`<div class="media-vids">${list.map((m,i)=>`<div class="glass" style="padding:8px"><video controls preload="none" poster="${esc(m.thumb||"")}" src="${esc(m.url)}"></video><div class="row" style="margin-top:4px;flex-wrap:nowrap"><span class="mu" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(m.title)}">${esc(m.title)}<br><span style="font-size:10px">${esc(m.credit||"")}</span></span>${pinned?`<button class="alt sm" onclick="mediaUnpin('${id}',${i})">✕</button>`:`<button class="alt sm" onclick="mediaPin('${id}','video',${i})">📌</button>`}</div></div>`).join("")}</div>`;
+  return`<div class="media-grid">${list.map((m,i)=>`<div class="mi" onclick='mediaView(${JSON.stringify(m.url)},${JSON.stringify(m.title)},${JSON.stringify(m.credit||"")},${JSON.stringify(m.page||"")})'><img loading="lazy" src="${esc(m.thumb||m.url)}" alt="${esc(m.title)}"><div class="mc" title="${esc(m.title)}">${esc(m.title)}</div>${pinned?`<span class="pin" onclick="event.stopPropagation();mediaUnpin('${id}',${i})">✕</span>`:`<span class="pin" title="Pin to this spellbook" onclick="event.stopPropagation();mediaPin('${id}','image',${i})">📌</span>`}</div>`).join("")}</div>`
+}
+function mediaInner(nb){
+  const id=nb.id,mine=MEDIA.id===id,topics=mediaTopics(nb),pin=nb.media||[],pi=pin.filter(m=>m.kind!=="video"),pv=pin.filter(m=>m.kind==="video");
+  return`<div class="mu" style="margin-bottom:8px">Real diagrams and short videos from <b>Wikimedia Commons</b> (free, with credits), plus a YouTube search. Pick a topic from your notebooks or search anything.</div>
+   <div class="row" style="gap:6px;flex-wrap:nowrap"><input type="text" id="mq_${id}" placeholder="e.g. photosynthesis, separation of powers, pH scale" value="${esc(mine?MEDIA.q:"")}" onkeydown="if(event.key==='Enter')mediaFind('${id}',this.value)"><button onclick="mediaFind('${id}',$('#mq_${id}').value)">🔎 Find</button></div>
+   ${topics.length?`<div class="row" style="justify-content:flex-start;gap:6px;flex-wrap:wrap;margin-top:8px">${topics.map(t=>`<button class="alt sm" onclick='mediaFind("${id}",${JSON.stringify(t)})'>${esc(t)}</button>`).join("")}</div>`:""}
+   ${mine&&MEDIA.busy?`<div class="mu" style="margin-top:10px">⏳ Searching for “${esc(MEDIA.q)}”…</div>`:""}
+   ${mine&&MEDIA.err?`<div class="mu" style="margin-top:10px">⚠️ ${esc(MEDIA.err)}</div>`:""}
+   ${mine&&!MEDIA.busy&&MEDIA.q?`<div class="row" style="justify-content:flex-start;margin-top:10px"><a class="btn alt" href="${esc(ytSearch(nb,MEDIA.q))}" target="_blank"><button class="alt sm">▶️ YouTube videos on “${esc(MEDIA.q)}”</button></a></div>`:""}
+   ${mine&&MEDIA.img.length?`<div style="margin-top:12px"><b>🖼️ Diagrams</b>${mediaCards(id,MEDIA.img,"image")}</div>`:""}
+   ${mine&&MEDIA.vid.length?`<div style="margin-top:14px"><b>🎬 Videos</b>${mediaCards(id,MEDIA.vid,"video")}</div>`:""}
+   ${pin.length?`<div style="margin-top:16px"><b>📌 Pinned for this spellbook</b>${pi.length?mediaCards(id,pi,"image",true):""}${pv.length?mediaCards(id,pv,"video",true):""}</div>`:""}`
+}
+function mediaRender(id){const e=document.getElementById("media_"+id),nb=NBS().find(d=>d.id===id);if(e&&nb)e.innerHTML=mediaInner(nb)}
 /* After the summative: the real level for every criterion in one place, the overall 1-7 grade, and calibration. */
 function realGradesPanel(nb,dl){
   const crs=activeCrit(nb);if(!crs.length)return"";
@@ -3556,6 +3620,7 @@ function vSpell(){
   <h2>📋 Syllabus <span class="pill">optional</span></h2><div class="glass"><div class="mu" style="margin-bottom:6px">${nb.syllabus?`Papers, spells and the plan use this syllabus together with your notes${(nb.syllabus.names||[]).length?" ("+(nb.syllabus.names||[]).map(esc).join(", ")+")":""}. Clear it to go back to notes only.`:"No syllabus — papers are built from your notes alone. Add one (photo, PDF, Word or text) and they adapt to it."}</div>
    <textarea rows="${nb.syllabus?8:3}" placeholder="Paste or type the syllabus topics…" oninput="sylSave('${nb.id}',this.value)">${esc((nb.syllabus||{}).text||"")}</textarea>
    <div class="row" style="justify-content:flex-start;margin-top:8px">${sylBox(nb.id)}</div></div>
+  <h2>🎬 Videos &amp; diagrams</h2><div class="glass" id="media_${nb.id}">${mediaInner(nb)}</div>
   ${realGradesPanel(nb,dl)}
   <h2>📄 Past papers &amp; recordings <span class="pill">optional</span></h2>${patSection(nb)}
   <h2>📓 Linked notebooks</h2><div class="mu" style="margin-bottom:6px">Tell the spellbook which criteria each notebook feeds — only criteria assigned to at least one notebook get a paper section, and a paper for Criterion A is built only from notebooks assigned to A.</div><div class="glass">${nbs.length?nbs.map(n=>{const on=(nb.links||[]).includes(n.id),cr=(nb.linkCrit||{})[n.id]||[];return`<div style="margin:8px 0"><label class="row" style="justify-content:flex-start"><input type="checkbox" style="width:auto" ${on?"checked":""} onchange="spLink('${nb.id}','${n.id}',this.checked)"> ${n.emoji||"📓"} <b>${esc(n.name)}</b> <span class="mu">${n.cards.length} cards</span></label>${on?`<div class="row" style="justify-content:flex-start;margin:4px 0 0 26px;gap:6px">${(nb.criteria||[]).map(c=>`<button class="${cr.includes(c.id)?"":"alt"}" style="padding:3px 10px;font-size:13px" onclick="spCrit('${nb.id}','${n.id}','${esc(c.id)}',${!cr.includes(c.id)})">${esc(c.id)}</button>`).join("")}<span class="mu">${cr.length?"feeds "+cr.join(", "):"pick criteria — unpicked ones are hidden from papers"}</span></div>`:""}</div>`}).join(""):'<div class="mu">No notebooks yet.</div>'}</div>
@@ -3810,6 +3875,8 @@ function sanitizeHtml(html){
       walk(ch);while(ch.firstChild)node.insertBefore(ch.firstChild,ch);ch.remove();return}
     [...ch.attributes].forEach(a=>{const n=a.name.toLowerCase();
       if(n==="style"){const keep=a.value.split(";").map(x=>x.trim()).filter(x=>{const[p,...v]=x.split(":");return p&&RT_CSS.test(p.trim().toLowerCase())&&!/url\(|expression|javascript|@import/i.test(v.join(":"))}).join(";");keep?ch.setAttribute("style",keep):ch.removeAttribute("style")}
+      else if(n==="class"&&ch.tagName==="SPAN"&&/^(frac|fn|fd)$/.test(a.value.trim())){}            // stacked fractions survive saving
+      else if(n==="contenteditable"&&ch.tagName==="SPAN"&&/^(true|false)$/.test(a.value)){}
       else if(!["colspan","rowspan","face","size","color","align"].includes(n))ch.removeAttribute(a.name)});
     walk(ch)})};
   walk(doc.body);
@@ -3825,6 +3892,7 @@ function rteText(html){
        the marker as "10-4" - ten MINUS four - and it quite correctly reported that no exponent had been
        given. In a maths paper that silently destroyed every index, every standard form and every
        chemical formula the student wrote. Written out explicitly instead, which no model misreads. */
+    if(t==="SPAN"&&n.classList.contains("frac")){const a=(n.querySelector(".fn")||{}).textContent||"",b=(n.querySelector(".fd")||{}).textContent||"";out.push("("+a.replace(/​/g,"").trim()+")/("+b.replace(/​/g,"").trim()+")");return}
     if(t==="SUP"){out.push("^("+n.textContent.trim()+")");return}
     if(t==="SUB"){out.push("_("+n.textContent.trim()+")");return}
     if(t==="TABLE"){out.push("\n");n.querySelectorAll("tr").forEach(tr=>out.push("| "+[...tr.children].map(c=>c.textContent.replace(/\s+/g," ").trim()).join(" | ")+" |\n"));return}
@@ -3845,6 +3913,7 @@ function rte(key,html,ph){
    <span class="rsep"></span>${b("justifyLeft","⇤","Align left")}${b("justifyCenter","↔","Centre")}${b("justifyRight","⇥","Align right")}${b("justifyFull","☰","Justify")}
    <span class="rsep"></span>${b("insertUnorderedList","• List","Bullet list")}${b("insertOrderedList","1. List","Numbered list")}
    <span class="rsep"></span><label class="rcol" title="Text colour">A<input type="color" value="#ffffff" onchange="rteCmd('${k}','foreColor',this.value)"></label><label class="rcol" title="Highlight">▮<input type="color" value="#ffe066" onchange="rteCmd('${k}','hiliteColor',this.value)"></label>
+   <button type="button" class="rb" title="Fraction — type the top and bottom" onmousedown="event.preventDefault()" onclick="rteFrac('${k}')"><span class="frac" style="font-size:.75em;margin:0"><span class="fn">a</span><span class="fd">b</span></span></button>
    <select title="Insert a symbol" onchange="rteSym('${k}',this.value);this.selectedIndex=0"><option value="">Ω symbol</option>${RSYMS.map(x=>`<option>${x}</option>`).join("")}</select>
    ${b("removeFormat","⌫","Clear formatting")}${b("undo","↶","Undo")}${b("redo","↷","Redo")}
    <span class="rsep"></span><span class="rtab" title="Insert a table">▦ <input type="number" min="1" max="12" value="3" id="rr-${k}"> × <input type="number" min="1" max="8" value="3" id="rc-${k}"><button type="button" class="rb" onmousedown="event.preventDefault()" onclick="rteTable('${k}')">Insert table</button></span>
@@ -3865,6 +3934,14 @@ function rteScript(k,tag){
 function rteCmd(k,cmd,val){if(cmd==="superscript")return rteScript(k,"SUP");if(cmd==="subscript")return rteScript(k,"SUB");if(!rteFocus(k))return;document.execCommand("styleWithCSS",false,true);document.execCommand(cmd,false,val||null);rteChange(k)}
 const rteFont=(k,v)=>v&&rteCmd(k,"fontName",v),rteSize=(k,v)=>v&&rteCmd(k,"fontSize",v);
 function rteSym(k,v){if(!v||!rteFocus(k))return;document.execCommand("insertText",false,v);rteChange(k)}
+/* a stacked fraction: a box on top, a line, a box below — the marker reads it as (top)/(bottom) */
+function rteFrac(k){const el=rteFocus(k);if(!el)return;const sel=getSelection();
+  let r=sel.rangeCount&&el.contains(sel.getRangeAt(0).startContainer)?sel.getRangeAt(0):null;
+  if(!r){r=document.createRange();r.selectNodeContents(el.lastElementChild&&/^(P|DIV)$/.test(el.lastElementChild.tagName)?el.lastElementChild:el);r.collapse(false)}
+  const f=document.createElement("span");f.className="frac";f.contentEditable="false";
+  const top=document.createElement("span");top.className="fn";top.contentEditable="true";const bot=document.createElement("span");bot.className="fd";bot.contentEditable="true";
+  f.append(top,bot);r.deleteContents();const after=document.createTextNode(" ");r.insertNode(after);r.insertNode(f);
+  top.focus();const c=document.createRange();c.selectNodeContents(top);c.collapse(true);sel.removeAllRanges();sel.addRange(c);rteChange(k)}
 function rteTable(k){
   const r=Math.max(1,Math.min(12,+($("#rr-"+k).value)||3)),c=Math.max(1,Math.min(8,+($("#rc-"+k).value)||3));
   let h="<table><tbody>";for(let i=0;i<r;i++){h+="<tr>";for(let j=0;j<c;j++)h+=i===0?"<th><br></th>":"<td><br></td>";h+="</tr>"}h+="</tbody></table><p><br></p>";
