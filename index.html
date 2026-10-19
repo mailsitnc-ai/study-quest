@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="sq-version" content="1.0.3">
+<meta name="sq-version" content="1.0.4">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Study Quest — Exam Prep RPG</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1891,7 +1891,10 @@ async function localPaper(nb,c,L,mins,marks,noteText,has,say){
       for(let pi=0;pi<plan[k].length;pi++){
         const pt=plan[k][pi],letter="abcdefgh"[pi];done++;say(`Writing question ${qn}${letter} (${done}/${total})…`,Math.round(done/total*100));
         const refQ=ref+" "+ctx+" "+factTxt;
-        const q=critQ(nb.fw,cr.id,pt.raw||pt.term,fa.topic,fa2&&fa2!==fa?fa2.topic:fa.topic,!nosrc,qn+pi);
+        let q=critQ(nb.fw,cr.id,pt.raw||pt.term,fa.topic,fa2&&fa2!==fa?fa2.topic:fa.topic,!nosrc,qn+pi);
+        const soiL=nb.fw==="is"&&cr.id==="B"?soiFor(nb):[];
+        if(soiL.length&&k===0&&pi===0)q=`Formulate a research question based on the statement of inquiry: “${soiL[0]}”.`;
+        else if(soiL.length&&k===0&&pi===1)q=`Explain how your research question connects to the statement of inquiry.`;
         say(`Writing the mark scheme for ${qn}${letter}…`,Math.round(done/total*100));
         const kx=msKind(pt.term,pt.marks);let ms="",mm=null;
         for(let a=0;a<2&&!mm;a++){
@@ -2181,7 +2184,7 @@ function vForge(){
 /* single notebook */
 function vNb(){
   const nb=NBS().find(d=>d.id===arg);if(!nb)return go("forge");
-  NF={fw:nb.fw||"none",crit:(nb.criteria||[]).map(c=>c.id),custom:nb.fw==="custom"?(nb.criteria||[]).map(c=>`${c.id} | ${c.name} | ${c.desc}`).join("\n"):""};
+  NF={fw:nb.fw||"none",crit:(nb.criteria||[]).map(c=>c.id),custom:nb.fw==="custom"?(nb.criteria||[]).map(c=>`${c.id} | ${c.name} | ${c.desc}`).join("\n"):"",soi:nb.soi||""};
   app.innerHTML=`<div class="row"><button class="alt" onclick="go('${nb.type==='spellbook'?'spell':'forge'}'${nb.type==='spellbook'?`,'${nb.id}'`:""})">←</button><h2 style="margin:0">${nb.emoji} ${esc(nb.name)}</h2><button onclick="go('region','${nb.id}')">⚔️ Play</button></div>
   <div class="glass"><div class="row"><b>Name</b></div><input type="text" value="${esc(nb.name)}" maxlength="40" onchange="editNB('${nb.id}',n=>n.name=this.value.trim()||n.name)"></div>
   ${nb.junkRemoved?`<div class="glass mu">🧹 The filter removed <b>${nb.junkRemoved}</b> planner / resource cards from this notebook automatically.</div>`:""}
@@ -2198,7 +2201,7 @@ function vNb(){
   stagedUI();
 }
 function editNB(id,fn,redraw){const all=NBS(),nb=all.find(d=>d.id===id);fn(nb);rebuild(nb);saveNBS(all);if(redraw)(view==="spell"?vSpell:vNb)()}
-function saveCrit(id){editNB(id,n=>{n.fw=NF.fw;n.criteria=chosenCriteria()},0);toast("🎯 Criteria saved")}
+function saveCrit(id){editNB(id,n=>{n.fw=NF.fw;n.criteria=chosenCriteria();if(NF.fw==="is"&&NF.soi!=null)n.soi=String(NF.soi).trim()},0);toast("🎯 Criteria saved")}
 async function addToNB(id){
   const pasted=$("#nt").value.trim(),src=staged.map(f=>({...f,cut:(f.cut||[]).slice(0,40)}));
   if(pasted){const c=cleanNotes(pasted);src.push({name:"Pasted notes "+new Date().toLocaleDateString(),text:c.text,cut:c.cut.slice(0,40)})}
@@ -2381,9 +2384,33 @@ function chosenCriteria(){
   return FW[NF.fw].c.filter(([id])=>NF.crit.includes(id)).map(([id,name,desc])=>({id,name,desc}))
 }
 function critInner(){const f=FW[NF.fw];
-  return`<select ${SEL} onchange="NF.fw=this.value;NF.crit=FW[this.value].c.map(x=>x[0]);cpRefresh()">${Object.entries(FW).map(([k,v])=>`<option value="${k}" ${NF.fw===k?"selected":""}>${v.n}</option>`).join("")}</select>
+  return`${soiBox()}<select ${SEL} onchange="NF.fw=this.value;NF.crit=FW[this.value].c.map(x=>x[0]);cpRefresh()">${Object.entries(FW).map(([k,v])=>`<option value="${k}" ${NF.fw===k?"selected":""}>${v.n}</option>`).join("")}</select>
   ${NF.fw==="custom"?`<textarea rows="4" style="margin-top:8px" placeholder="One per line:  A | Knowing the content | what it assesses" oninput="NF.custom=this.value">${esc(NF.custom||"")}</textarea>`:f.c.map(([id,n,d])=>`<label class="row" style="justify-content:flex-start;margin-top:8px;align-items:flex-start;flex-wrap:nowrap"><input type="checkbox" style="width:auto;margin-top:5px" ${NF.crit.includes(id)?"checked":""} onchange="toggleCrit('${id}',this.checked)"> <span><b>Criterion ${id}: ${n}</b><div class="mu">${d}</div></span></label>`).join("")}`}
 const cpRefresh=()=>{const e=$("#cp");if(e)e.innerHTML=critInner();lkRefresh()};
+/* ---- I&S Statement of Inquiry: kept apart from the notes (it never becomes cards or questions) and used only
+   to build Criterion B research-question tasks, from whichever notebooks feed Criterion B ---- */
+function detectSOI(texts){
+  const lines=String(texts||"").split(/\n/).map(x=>x.trim());
+  for(let i=0;i<lines.length;i++){const m=lines[i].match(/^(?:\W*)statement of inquiry\s*[:\-–—]?\s*(.*)$/i);if(!m)continue;
+    let t=m[1].trim();if(t.length<12)t=(lines.slice(i+1).find(x=>x.length>=12)||"");
+    t=t.replace(/^["“']|["”']$/g,"").trim();if(t.length>=12&&t.length<=400)return t}
+  return""
+}
+const soiStaged=()=>detectSOI(staged.flatMap(f=>[...(f.cut||[]),f.raw||""]).join("\n")+"\n"+(($("#nt")||{}).value||""));
+function soiBox(){
+  if(NF.fw!=="is")return"";
+  if(NF.soi==null)NF.soi=(view==="nb"?((NBS().find(d=>d.id===arg)||{}).soi||""):"")||soiStaged();
+  return`<div class="glass" style="margin-top:10px;border-color:var(--gold)"><b>🧭 Statement of Inquiry (SOI)</b> <span class="pill">I&amp;S</span>
+    <div class="mu" style="margin:4px 0 6px">Your unit's SOI. It's kept separate from your notes (it never becomes cards or questions) and is used only for <b>Criterion B</b>: research questions in your papers are formulated from it, like in class.</div>
+    <textarea id="soi" rows="2" placeholder="e.g. Trade and migration shape how communities interact and change over time." oninput="NF.soi=this.value" onchange="soiSaved(this.value)">${esc(NF.soi||"")}</textarea></div>`
+}
+function soiSaved(v){NF.soi=v;if(view==="nb"&&arg){editNB(arg,n=>{n.soi=String(v||"").trim()},0);toast(v.trim()?"🧭 SOI saved — Criterion B research questions will use it":"SOI cleared")}}
+function soiFor(nb){
+  if(!nb)return[];const list=[nb.soi];
+  if(nb.type==="spellbook")for(const n of feeders(nb,"B"))list.push(n.soi);
+  return[...new Set(list.map(x=>String(x||"").trim()).filter(Boolean))]
+}
+const soiNote=nb=>{const l=soiFor(nb);return l.length?`\nCRITERION B — STATEMENT OF INQUIRY: in this class, research questions are ALWAYS formulated from the unit's Statement of Inquiry${l.length>1?" (one per unit)":""}:\n${l.map(x=>"  • “"+x+"”").join("\n")}\nEvery Criterion B task must be built on ${l.length>1?"one of these":"it"}: ask the student to formulate a focused, researchable research question clearly derived from the SOI, explain how the question connects to the SOI, and plan/justify an investigation of it (action plan, methods, sources). Use the SOI ONLY for Criterion B — Criteria A, C and D come from the notes as usual.`:""};
 const toggleCrit=(id,on)=>{NF.crit=on?[...new Set([...NF.crit,id])]:NF.crit.filter(x=>x!==id);lkRefresh()};
 
 /* ---------- AI triage: sort every block of an upload ---------- */
@@ -2637,9 +2664,12 @@ function readForm(kind){
   const patText=kind==="spell"?[...PAT.map(x=>x.text),($("#pat")?.value||"").trim()].filter(Boolean).join("\n\n").slice(0,24000):"",pattern=kind==="spell"?patOf([...PAT.map((x,i)=>({id:x.id||"p"+i,name:x.name,text:x.text,kind:x.kind||(isVideo(x)?"video":"file"),at:x.at||Date.now()})),{id:"typed",name:"Your format description",text:($("#pat")?.value||"").trim(),kind:"typed",at:Date.now()}]):null;
   const sylText=kind==="spell"?[...SYL.map(x=>x.text),($("#syt")?.value||"").trim()].filter(Boolean).join("\n\n").slice(0,20000):"",syllabus=sylText.length>20?{text:sylText,names:SYL.map(x=>x.name),at:Date.now()}:null;
   if(!sources.length&&!links.length&&!syllabus){toast(kind==="spell"?"Link a notebook, add a syllabus or upload something":"Upload or paste some notes first");return null}
-  return{kind,syllabus,pattern,grade:S.grade||3,name,emoji:nbEmoji,fw:NF.fw,criteria:crit,sources,links,linkCrit,date:kind==="spell"?($("#sd")?.value||""):"",useAI:aiReady(),review:false}
+  let soi=NF.fw==="is"?String(($("#soi")||{}).value??NF.soi??"").trim():"";
+  if(NF.fw==="is"&&!soi){soi=soiStaged();if(soi){NF.soi=soi;const e=$("#soi");if(e)e.value=soi;toast("🧭 Found your Statement of Inquiry in the notes — check it, then press Create again");return null}
+    if(!confirm("No Statement of Inquiry (SOI) yet.\n\nFor I&S, Criterion B research questions are formulated from the SOI. You can add it later in this notebook's settings.\n\nOK = create without it    Cancel = add it now")){$("#soi")?.focus();return null}}
+  return{kind,syllabus,pattern,soi,grade:S.grade||3,name,emoji:nbEmoji,fw:NF.fw,criteria:crit,sources,links,linkCrit,date:kind==="spell"?($("#sd")?.value||""):"",useAI:aiReady(),review:false}
 }
-const makeNB=(f,sources,unit)=>({id:(f.kind==="spell"?"sp":"nb")+Date.now(),type:f.kind==="spell"?"spellbook":"nb",name:f.name,emoji:f.emoji,fw:f.fw,criteria:f.criteria,unit:unit||{},date:f.date,links:f.links,linkCrit:f.linkCrit||{},sources,manual:[],removed:[],spells:{},syllabus:f.syllabus||null,pattern:f.pattern||null,grade:f.grade});
+const makeNB=(f,sources,unit)=>({id:(f.kind==="spell"?"sp":"nb")+Date.now(),type:f.kind==="spell"?"spellbook":"nb",name:f.name,emoji:f.emoji,fw:f.fw,criteria:f.criteria,unit:unit||{},date:f.date,links:f.links,linkCrit:f.linkCrit||{},sources,manual:[],removed:[],spells:{},syllabus:f.syllabus||null,pattern:f.pattern||null,grade:f.grade,soi:f.soi||""});
 window.SAGE_BUDGET=120000;
 /* Sage writes the cards first; if it is slow or fails, you start straight away and Sage keeps going in the background */
 async function sageFirst(id){
@@ -2900,7 +2930,7 @@ const paperSys=(nb,c,L,mins,marks,has)=>{
   return`You are a senior ${fwn} examiner writing ONE timed paper that mirrors a REAL ${fwn} assessment for a student in ${yearLbl(gr)}. It assesses ${target}
 STUDENT YEAR — pitch every question at this: ${GRADES[gr]}
 Difficulty tier within that year: ${L.n} — ${L.d} (relative to the ${yearLbl(gr)} standard, never beyond it).
-${bp}${!multi&&hasPat&&!pat?`\nThe student's sample paper has no part that assesses Criterion ${c.id}, so use the generic FORMAT above for this criterion.`:""}${pat?`\nPAPER PATTERN — ${multi?"this is the student's REAL paper format (the whole paper). MIRROR it":`this is ONLY the Criterion ${c.id} part of the student's REAL paper — the questions that assess ${c.id}. Mirror THAT part and nothing else: do not add sections or question types that belong to other criteria. MIRROR it`}: its sections and their instructions, number and type of questions, how marks are spread, command terms, the kind of stimulus material, wording and tone. Subjects, examples and topics that appear in the sample are NOT content to reuse — take content ONLY from the notes/syllabus. Write ENTIRELY NEW questions on the syllabus/notes content, adapted to the criterion strands and the student's year, scaled to the total marks and time below. Where the pattern differs from the generic FORMAT above, follow the pattern. The pattern decides HOW the paper looks, never WHAT it asks about.${ban.length?`\nThese words come from the sample paper's own topics, which are NOT this student's syllabus — never use any of them in a question, context, source or figure: ${ban.join(", ")}`:""}\n${pat}`:""}
+${bp}${nb.fw==="is"&&(multi?c.all.some(x=>x.id==="B"):c.id==="B")?soiNote(nb):""}${!multi&&hasPat&&!pat?`\nThe student's sample paper has no part that assesses Criterion ${c.id}, so use the generic FORMAT above for this criterion.`:""}${pat?`\nPAPER PATTERN — ${multi?"this is the student's REAL paper format (the whole paper). MIRROR it":`this is ONLY the Criterion ${c.id} part of the student's REAL paper — the questions that assess ${c.id}. Mirror THAT part and nothing else: do not add sections or question types that belong to other criteria. MIRROR it`}: its sections and their instructions, number and type of questions, how marks are spread, command terms, the kind of stimulus material, wording and tone. Subjects, examples and topics that appear in the sample are NOT content to reuse — take content ONLY from the notes/syllabus. Write ENTIRELY NEW questions on the syllabus/notes content, adapted to the criterion strands and the student's year, scaled to the total marks and time below. Where the pattern differs from the generic FORMAT above, follow the pattern. The pattern decides HOW the paper looks, never WHAT it asks about.${ban.length?`\nThese words come from the sample paper's own topics, which are NOT this student's syllabus — never use any of them in a question, context, source or figure: ${ban.join(", ")}`:""}\n${pat}`:""}
 TOP BAND (so hard work can earn a 7): for every criterion assessed, include at least one part whose full marks require the 7-8 achievement level on EACH of that criterion's strands above — the most demanding command term the student's year allows, an unfamiliar context, and a justified, evidence-backed judgment. In each markscheme, say what earns the top marks (7-8 standard) versus 5-6 for that part.
 Time allowed: ${mins} minutes. Total marks: exactly ${marks}.
 Rules:
@@ -3076,7 +3106,7 @@ const wcount=t=>(String(t||"").trim().match(/\S+/g)||[]).length;
 const ans=(id,v)=>{if(!S.run)return;const w=document.getElementById("wc-"+id);if(w)w.textContent=wcount(v)+" words";S.run.answers[id]=v;clearTimeout(AT);AT=setTimeout(save,500)};
 function tickPaper(){const r=S.run;if(!r||view!=="paper"){clearInterval(PT);return}const left=r.start+r.mins*60000-Date.now(),e=$("#pt");if(e){e.textContent=fmt(left);e.style.background=left<300000?"#ff5470":""}if(left<=0){clearInterval(PT);toast("⏰ Time's up!");vPaper()}}
 /* ---------- fast marking: one small call PER ANSWER, run in parallel, started early ---------- */
-const gradeSys=(nb,c)=>`You are a fair but rigorous ${(FW[nb.fw]||{}).n||"school"} examiner marking ONE answer from a student in ${yearLbl(gradeOf(nb))} (judge to ${yearLbl(gradeOf(nb))} expectations${gradeOf(nb)>5?", using IB mark-scheme conventions: credit each valid marking point, accept equivalent wording":", not DP"}) for Criterion ${c.id} (${c.name}). The criterion's strands:\n${critGuide(nb,c)}\nMark strictly against the mark scheme; award partial marks where earned; blank or irrelevant = 0; do not reward waffle or repeated points; accept correct answers worded differently from the model answer. Tables in the answer arrive as text rows separated by | ; fonts, colours and alignment are not marked unless the question is about presentation.
+const gradeSys=(nb,c)=>`You are a fair but rigorous ${(FW[nb.fw]||{}).n||"school"} examiner marking ONE answer from a student in ${yearLbl(gradeOf(nb))} (judge to ${yearLbl(gradeOf(nb))} expectations${gradeOf(nb)>5?", using IB mark-scheme conventions: credit each valid marking point, accept equivalent wording":", not DP"}) for Criterion ${c.id} (${c.name}). The criterion's strands:\n${critGuide(nb,c)}\n${nb.fw==="is"&&c.id==="B"&&soiFor(nb).length?`The class formulates research questions FROM the Statement of Inquiry (${soiFor(nb).map(x=>"“"+x+"”").join(" / ")}): credit how clearly the student's research question derives from and connects to it.\n`:""}Mark strictly against the mark scheme; award partial marks where earned; blank or irrelevant = 0; do not reward waffle or repeated points; accept correct answers worded differently from the model answer. Tables in the answer arrive as text rows separated by | ; fonts, colours and alignment are not marked unless the question is about presentation.
 Your feedback must be about THIS student's answer: refer to what they actually wrote (quote a few of their words) and name exactly which marking point was met or missed.
 Output ONLY compact JSON: {"awarded":0,"feedback":"max 45 words: what in THEIR answer earned or lost each mark, quoting them","good":"max 15 words on what they did well, or empty","tip":"max 30 words: the exact sentence or point that would have earned the lost marks, or empty if full marks","missed":[{"q":"flashcard-style question","a":"short answer"}]}
 "missed" lists 0-2 concepts the student got wrong or left out (empty if none). Each missed.q MUST be a complete, self-contained flashcard question that can be understood with NO other context: name the subject explicitly, never use words like each, this, these, it, the source, the table, the experiment, and always end with a question mark.`;
@@ -3233,7 +3263,7 @@ async function bestFit(nb,c,rows){
 2. Find the band whose descriptor best matches the work as a whole across ALL strands (do NOT convert a percentage).
 3. Within that band, give the higher level if the band's descriptor is fully and consistently met, the lower level if only partly.
 4. Judge to ${yearLbl(yr)} expectations: do not demand DP depth, do not reward vague answers.
-DESCRIPTORS FOR CRITERION ${c.id} (${yearLbl(yr)}):
+${nb.fw==="is"&&c.id==="B"&&soiFor(nb).length?`In this class research questions must be formulated FROM the Statement of Inquiry: ${soiFor(nb).map(x=>"“"+x+"”").join(" / ")}. Judge how well the research question and plan derive from it.\n`:""}DESCRIPTORS FOR CRITERION ${c.id} (${yearLbl(yr)}):
 ${bandText(nb,c)}
 Reply ONLY with JSON: {"level":0,"band":"5-6","strands":[{"strand":"3-6 word name of the strand","band":"3-4","evidence":"a short quote of the student's OWN words that shows this","next":"one specific thing to do to reach the next band on this strand"}],"summary":"2-3 sentences about THIS student's actual answers (refer to what they wrote)","to_next":"the single most important change to reach the next band"}`;
   const tk=t=>Math.ceil(String(t||"").length/3),per=lim?Math.max(150,Math.floor(((lim-tk(sys)-1800)*3)/Math.max(1,rows.length)-120)):900;
