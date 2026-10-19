@@ -1634,7 +1634,8 @@ let MC={},GOODM={},LASTCALL=0;const BADM=new Set();   // models this account can
 function aiLog(m){S.aiLog=S.aiLog||[];S.aiLog.push({t:Date.now(),m:String(m).slice(0,320)});if(S.aiLog.length>40)S.aiLog.shift();save()}
 PROVIDERS.groq.tpm=6000;PROVIDERS.groq.chunk=3000;PROVIDERS.groq.outMax=1500;PROVIDERS.groq.maxCards=7;
 const TPMMAP={},TOKLOG=[];
-const tpmLimit=()=>TPMMAP[S.prov+"|"+(S.model||"")]||prov().tpm||0;
+const TPM_KNOWN={"groq|openai/gpt-oss-120b":8000,"groq|openai/gpt-oss-20b":8000,"groq|llama-3.3-70b-versatile":12000,"groq|llama-3.1-8b-instant":6000};
+const tpmLimit=()=>{const k=S.prov+"|"+(S.model||"");return TPMMAP[k]||TPM_KNOWN[k]||(S.prov==="groq"?8000:prov().tpm)||0};   // the learned limit wins; otherwise the model's known free-tier limit
 const tokEst=(messages,system,max)=>Math.ceil((String(system||"").length+messages.reduce((n,m)=>n+String(m.content||"").length,0))/3.2)+(max||0);
 /* a client-side token bucket: wait here instead of being rejected by the provider */
 async function tpmGate(est){const L=tpmLimit();if(!L)return null;const cap=L*.82;
@@ -2984,8 +2985,11 @@ async function beginPaper(){
   let shrink=1;const limNow=()=>Math.floor(((typeof tpmLimit==="function"&&tpmLimit())||0)*0.85*shrink),lim=limNow(),tk=t=>Math.ceil(String(t||"").length/3);
   const fitReq=(sys,notesTxt,maxWant)=>{
     const L2=limNow(),mx=L2?Math.max(1500,Math.min(maxWant,Math.floor(L2*0.38))):maxWant;let ui=unitInfo(nb,has.notes),nt=notesTxt;
-    if(L2){const room=Math.floor((L2-mx-tk(sys)-150)*3);if(room<1500)return null;ui=ui.slice(0,Math.floor(room*0.25));nt=spread(nt,Math.max(800,room-ui.length))}
-    return{user:`UNIT INFO:\n${ui}\n\nSTUDENT NOTES:\n${nt}`,max:mx}};
+    let mxF=mx;
+    if(L2){let room=Math.floor((L2-mxF-tk(sys)-150)*3);
+      if(room<1500){mxF=Math.max(1200,mx-Math.ceil((1500-room)/3));room=Math.floor((L2-mxF-tk(sys)-150)*3)}   // tight: give some answer room to the notes
+      room=Math.max(700,room);ui=ui.slice(0,Math.floor(room*0.25));nt=spread(nt,Math.max(500,room-ui.length))}
+    return{user:`UNIT INFO:\n${ui}\n\nSTUDENT NOTES:\n${nt}`,max:mxF}};
   const waitUI=(msg,pct)=>m=>{window._busyBtn=()=>{PAPER_CANCEL=true;busy("Stopping…")};busy(msg+" ("+m+")",pct,"Cancel")};
   const sectioned=async()=>{
     const crits=c.all,gr=gradeOf(nb),skM=x=>nb.pattern&&nb.pattern.text?planFromSkeleton(patSkeletonFor(nb.pattern.text,x.id),gr).flat().reduce((n,q)=>n+q.marks,0):0;
