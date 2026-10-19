@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="sq-version" content="1.0.2">
+<meta name="sq-version" content="1.0.3">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Study Quest — Exam Prep RPG</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3077,7 +3077,8 @@ const ans=(id,v)=>{if(!S.run)return;const w=document.getElementById("wc-"+id);if
 function tickPaper(){const r=S.run;if(!r||view!=="paper"){clearInterval(PT);return}const left=r.start+r.mins*60000-Date.now(),e=$("#pt");if(e){e.textContent=fmt(left);e.style.background=left<300000?"#ff5470":""}if(left<=0){clearInterval(PT);toast("⏰ Time's up!");vPaper()}}
 /* ---------- fast marking: one small call PER ANSWER, run in parallel, started early ---------- */
 const gradeSys=(nb,c)=>`You are a fair but rigorous ${(FW[nb.fw]||{}).n||"school"} examiner marking ONE answer from a student in ${yearLbl(gradeOf(nb))} (judge to ${yearLbl(gradeOf(nb))} expectations${gradeOf(nb)>5?", using IB mark-scheme conventions: credit each valid marking point, accept equivalent wording":", not DP"}) for Criterion ${c.id} (${c.name}). The criterion's strands:\n${critGuide(nb,c)}\nMark strictly against the mark scheme; award partial marks where earned; blank or irrelevant = 0; do not reward waffle or repeated points; accept correct answers worded differently from the model answer. Tables in the answer arrive as text rows separated by | ; fonts, colours and alignment are not marked unless the question is about presentation.
-Output ONLY compact JSON: {"awarded":0,"feedback":"max 25 words: exactly what earned or lost marks","good":"max 10 words on what was done well, or empty","tip":"max 20 words on how to gain the lost marks, or empty if full marks","missed":[{"q":"flashcard-style question","a":"short answer"}]}
+Your feedback must be about THIS student's answer: refer to what they actually wrote (quote a few of their words) and name exactly which marking point was met or missed.
+Output ONLY compact JSON: {"awarded":0,"feedback":"max 45 words: what in THEIR answer earned or lost each mark, quoting them","good":"max 15 words on what they did well, or empty","tip":"max 30 words: the exact sentence or point that would have earned the lost marks, or empty if full marks","missed":[{"q":"flashcard-style question","a":"short answer"}]}
 "missed" lists 0-2 concepts the student got wrong or left out (empty if none). Each missed.q MUST be a complete, self-contained flashcard question that can be understood with NO other context: name the subject explicitly, never use words like each, this, these, it, the source, the table, the experiment, and always end with a question mark.`;
 let GR={},GQ=[],GRUN=0;
 async function pool(tasks,limit){let i=0,err=null;await Promise.all(Array.from({length:Math.min(limit,tasks.length)},async()=>{while(i<tasks.length&&!err){const t=tasks[i++];try{await t()}catch(e){err=e}}}));if(err)throw err}
@@ -3111,7 +3112,7 @@ async function gradeOne(nb,c,q,answer){
   if(!answer.trim())return{awarded:0,feedback:"No answer given — attempt every question; partial answers can earn marks.",good:"",tip:"Write something for every question.",missed:[]};
   let last;
   for(let t=0;t<2;t++){
-    try{const raw=await llm([{role:"user",content:JSON.stringify({question:q.prompt,context:(q.context||q.ctxRef||"")+(q.fcap?" [Figure: "+q.fcap+"]":"")+(q.chart?" [Graph data: "+JSON.stringify(q.chart.series.map(s=>({[s.name||"y"]:s.values})))+" at "+q.chart.labels.join(", ")+"]":""),marks:q.marks,markscheme:q.markscheme,model_answer:q.model_answer,student_answer:answer})}],{system:gradeSys(nb,c)+calNote(nb,c)+(t?SIMPLE_MARK:""),max:700});
+    try{const raw=await llm([{role:"user",content:JSON.stringify({question:q.prompt,context:(q.context||q.ctxRef||"")+(q.fcap?" [Figure: "+q.fcap+"]":"")+(q.chart?" [Graph data: "+JSON.stringify(q.chart.series.map(s=>({[s.name||"y"]:s.values})))+" at "+q.chart.labels.join(", ")+"]":""),marks:q.marks,markscheme:q.markscheme,model_answer:q.model_answer,student_answer:answer})}],{system:gradeSys(nb,c)+calNote(nb,c)+(t?SIMPLE_MARK:""),max:1400,patient:true});
       const o=parseMark(raw,q.marks);
       if(!o)aiLog(`Marking unreadable (attempt ${t+1}) for "${String(q.prompt).slice(0,50)}" — model said: ${String(raw).slice(0,160)}`);
       if(o)return{...o,awarded:Math.max(0,Math.min(q.marks,Math.round(o.awarded)))};
@@ -3183,27 +3184,123 @@ async function submitPaper(){
     n.manual=n.manual||[];miss.forEach(m=>{const q=String(m.q).trim();if(!have.has(q)){n.manual.push({q,a:String(m.a).trim(),topic:"From paper review",note:"You missed this in a paper"});S.miss[n.id+"::"+q]=1;added++}});
     rebuild(n);saveNBS(all)}
   const byCrit={};if(c.all)rows.forEach(w=>{const k=w.crit||"?";byCrit[k]=byCrit[k]||{got:0,max:0};byCrit[k].got+=w.awarded;byCrit[k].max+=w.marks});
-  S.lastPaper={yr:gradeOf(nb),byCrit,id:r.id,name:nb.name,crit:r.crit,cname:c.name,lvl:r.lvl,mins:r.mins,rows,got,max,pct,stars,xp,gold,chest,added,strengths,improvements,fw:nb.fw,unmarked,total:qs.length};
+  // IB best fit: each criterion gets ONE level from the descriptors (not from a percentage)
+  const levels={},myp=nb.fw&&nb.fw!=="custom"&&nb.fw!=="none"&&gradeOf(nb)<=5;
+  if(myp&&max>0){const ids=c.all?Object.keys(byCrit).filter(k=>k!=="?"):[c.id];
+    for(let ii=0;ii<ids.length;ii++){const id=ids[ii],cr=(nb.criteria||[]).find(x=>x.id===id)||c;
+      busy(`📏 Grading Criterion ${esc(id)} against the IB descriptors… (${ii+1}/${ids.length})`,Math.round(ii/ids.length*100));
+      const cw=rows.filter(w=>!c.all||w.crit===id),pc=(()=>{const g=cw.reduce((n,w)=>n+w.awarded,0),m=cw.reduce((n,w)=>n+w.marks,0);return m?g/m*100:0})();
+      let bf=null;try{bf=await bestFit(nb,cr,cw)}catch(e){}
+      if(!bf)bf={level:Math.round(pc/100*8),band:"",strands:[],summary:"",to_next:"",method:"marks"};
+      levels[id]={...bf,raw:bf.level,level:calibrate(bf.level,nb.fw,id)}}
+    busy();
+    S.pred=S.pred||{};S.pred[r.id]={...(S.pred[r.id]||{})};for(const k in levels)S.pred[r.id][k]=levels[k].level}
+  const lvVals=Object.values(levels).map(x=>x.level),overall=c.all&&lvVals.length===4?{total:lvVals.reduce((a,b)=>a+b,0),grade:gradeFromTotal(lvVals.reduce((a,b)=>a+b,0))}:null;
+  S.lastPaper={levels,overall,yr:gradeOf(nb),byCrit,id:r.id,name:nb.name,crit:r.crit,cname:c.name,lvl:r.lvl,mins:r.mins,rows,got,max,pct,stars,xp,gold,chest,added,strengths,improvements,fw:nb.fw,unmarked,total:qs.length};
   S.run=null;GR={};GQ=[];checkAch();save();(pct>=60?(SFX.win(),confetti()):SFX.lose());go("presult")
+}
+/* ---------- IB MYP achievement-level descriptors, built for every subject, criterion and year ----------
+   How the IB writes them: each band uses the criterion's strands, with the command term stepping down one rung
+   per band (7-8 uses the objective's own term, 5-6 one lower, 3-4 lower, 1-2 lowest) and a qualifier
+   (limited / adequate / substantial / excellent). The objectives themselves are lighter in MYP 1-2 and 3-4 than
+   in MYP 5. Strands come from GUIDE (the MYP 5 objectives); yrVerb() adapts them to the student's year.
+   Paraphrased from the published MYP subject guides' structure, not copied. */
+const QUAL={"1-2":"with limited success","3-4":"adequately, with some gaps or inaccuracies","5-6":"substantially and mostly accurately","7-8":"excellently: accurately, thoroughly and consistently"};
+const RUNG_KNOW=["state","outline","describe","explain"],RUNG_THINK=["identify","interpret","analyse","analyse and evaluate"],RUNG_ARGUE=["state","outline","discuss","justify"];
+function yrVerb(strand,yr){
+  if(yr>=5)return strand;
+  const map=yr<=2?[[/^analyse and evaluate\b/i,"interpret"],[/^explain\b/i,"outline"],[/^analyse\b/i,"interpret"],[/^evaluate\b/i,"interpret"],[/^discuss\b/i,"outline"],[/^justify\b/i,"outline"],[/^formulate\b/i,"state"],[/^synthesi[sz]e\b/i,"summarise"]]
+    :[[/^analyse and evaluate\b/i,"analyse"],[/^explain\b/i,"describe"],[/^evaluate\b/i,"discuss"],[/^justify\b/i,"explain"],[/^synthesi[sz]e\b/i,"summarise"]];
+  for(const[re,v]of map)if(re.test(strand))return strand.replace(re,v);
+  return strand
+}
+function mypBands(nb,c){
+  const yr=gradeOf(nb),strands=((GUIDE[nb.fw]||{})[c.id]||[c.desc||c.name]).map(x=>yrVerb(String(x),yr)),out={};
+  [["1-2",0],["3-4",1],["5-6",2],["7-8",3]].forEach(([b,i])=>{out[b]=strands.map(st=>{
+    const m=st.match(/^(analyse and evaluate|state|outline|describe|explain|identify|interpret|analyse|discuss|justify)\b/i);let t=st;
+    if(m){const v=m[1].toLowerCase(),R=RUNG_KNOW.includes(v)?RUNG_KNOW:RUNG_THINK.includes(v)?RUNG_THINK:RUNG_ARGUE.includes(v)?RUNG_ARGUE:null;
+      if(R){const top=R.indexOf(v);t=st.replace(m[0],R[Math.max(0,top-(3-i))])}}
+    return t+" — "+QUAL[b]})});
+  return out
+}
+const bandText=(nb,c)=>{const b=mypBands(nb,c);return"0: does not reach a standard described by any of the descriptors below.\n"+Object.entries(b).map(([k,v])=>`${k}: the student is able to\n${v.map(x=>"  - "+x).join("\n")}`).join("\n")};
+const calibrate=(lv,fw,crit)=>{let c=calOffset(fw,crit);if(!c.n)c=calSubject(fw);return Math.max(0,Math.min(8,Math.round(lv+calClamp(c.off,c.n))))};
+/* Best fit, the IB way: one level for the criterion as a whole, judged against the descriptors - not a percentage. */
+async function bestFit(nb,c,rows){
+  const yr=gradeOf(nb),lim=Math.floor(((typeof tpmLimit==="function"&&tpmLimit())||0)*0.8);
+  const sys=`You are an experienced IB ${(FW[nb.fw]||{}).n||"MYP"} teacher moderating the work of a student in ${yearLbl(yr)} for Criterion ${c.id} (${c.name}). Award ONE achievement level from 0 to 8 by BEST FIT, exactly as IB teachers do:
+1. Read ALL of the student's answers for this criterion together.
+2. Find the band whose descriptor best matches the work as a whole across ALL strands (do NOT convert a percentage).
+3. Within that band, give the higher level if the band's descriptor is fully and consistently met, the lower level if only partly.
+4. Judge to ${yearLbl(yr)} expectations: do not demand DP depth, do not reward vague answers.
+DESCRIPTORS FOR CRITERION ${c.id} (${yearLbl(yr)}):
+${bandText(nb,c)}
+Reply ONLY with JSON: {"level":0,"band":"5-6","strands":[{"strand":"3-6 word name of the strand","band":"3-4","evidence":"a short quote of the student's OWN words that shows this","next":"one specific thing to do to reach the next band on this strand"}],"summary":"2-3 sentences about THIS student's actual answers (refer to what they wrote)","to_next":"the single most important change to reach the next band"}`;
+  const tk=t=>Math.ceil(String(t||"").length/3),per=lim?Math.max(150,Math.floor(((lim-tk(sys)-1800)*3)/Math.max(1,rows.length)-120)):900;
+  const body=rows.map(w=>({question:String(w.prompt||"").slice(0,300),marks:w.marks,awarded:w.awarded,student_answer:String(w.answer||"").replace(/\s+/g," ").slice(0,per)||"(blank)",marker_note:String(w.feedback||"").slice(0,160)}));
+  for(let t=0;t<2;t++){try{
+    const o=parseObj(await llm([{role:"user",content:JSON.stringify(body)}],{system:sys+(t?"\n\nYour last reply could not be read. Reply with the JSON object only.":""),max:1800,patient:true}));
+    if(o&&isFinite(Number(o.level)))return{level:Math.max(0,Math.min(8,Math.round(Number(o.level)))),band:String(o.band||""),strands:Array.isArray(o.strands)?o.strands.slice(0,6):[],summary:String(o.summary||""),to_next:String(o.to_next||""),method:"descriptors"}}
+    catch(e){if(e.message===CANCEL_MSG)break}}
+  return null
+}
+/* After the summative: the real level for every criterion in one place, the overall 1-7 grade, and calibration. */
+function realGradesPanel(nb,dl){
+  const crs=activeCrit(nb);if(!crs.length)return"";
+  const done=nb.realGrade,show=done||(dl!=null&&dl<0)||window.__rgOpen===nb.id;
+  if(!show)return`<div class="row" style="justify-content:flex-start;margin:8px 0"><button class="alt" onclick="window.__rgOpen='${nb.id}';vSpell()">🎓 Enter your real summative grades</button></div>`;
+  const pred=(S.pred||{})[nb.id]||{},cur=done?done.levels:{};
+  const opts=(id)=>`<select id="rg_${esc(id)}" onchange="rgTotal('${nb.id}')" style="width:auto">${["",0,1,2,3,4,5,6,7,8].map(v=>`<option value="${v}" ${String(cur[id]??"")===String(v)&&v!==""?"selected":""}>${v===""?"—":v}</option>`).join("")}</select>`;
+  return`<h2>🎓 Summative result ${done?`<span class="pill">MYP grade ${done.grade}/7</span>`:""}</h2><div class="glass">
+    <div class="mu" style="margin-bottom:8px">${done?"Your recorded summative levels. Change any and save again.":"Your summative date has passed — enter the level your teacher gave for each criterion. Sage uses these to mark you exactly like your teacher, and works out your overall grade."}</div>
+    ${crs.map(c=>`<div class="row" style="margin:6px 0"><span><b>Criterion ${esc(c.id)}</b> ${esc(c.name)}${typeof pred[c.id]==="number"?` <span class="mu">· Sage predicted ${pred[c.id]}</span>`:""}</span>${opts(c.id)}</div>`).join("")}
+    <div class="row" style="margin-top:10px"><b id="rgout">${done?`Total ${done.total}/${crs.length*8} → MYP grade ${done.grade}/7`:"Pick each level to see your grade"}</b><button class="gold" onclick="rgSave('${nb.id}')">Save summative grades</button></div></div>`
+}
+function rgTotal(id){const nb=NBS().find(d=>d.id===id);if(!nb)return;const crs=activeCrit(nb),v=crs.map(c=>($("#rg_"+c.id)||{}).value).filter(x=>x!==""&&x!=null).map(Number);
+  const o=$("#rgout");if(o)o.textContent=v.length===crs.length?`Total ${v.reduce((a,b)=>a+b,0)}/${crs.length*8} → MYP grade ${crs.length===4?gradeFromTotal(v.reduce((a,b)=>a+b,0)):"—"}/7`:`${v.length}/${crs.length} criteria entered`}
+function rgSave(id){
+  const all=NBS(),nb=all.find(d=>d.id===id);if(!nb)return;const crs=activeCrit(nb),levels={};
+  for(const c of crs){const v=($("#rg_"+c.id)||{}).value;if(v===""||v==null)return toast(`Pick a level for Criterion ${c.id} first`);levels[c.id]=Number(v)}
+  const pred=(S.pred||{})[id]||{};for(const c of crs)recordRealSave(id,c.id,levels[c.id],typeof pred[c.id]==="number"?pred[c.id]:undefined,true);
+  const total=Object.values(levels).reduce((a,b)=>a+b,0);nb.realGrade={levels,total,grade:crs.length===4?gradeFromTotal(total):null,date:nb.date||"",at:Date.now()};saveNBS(all);save();
+  window.__rgOpen=null;toast(`🎓 Saved — ${total}/${crs.length*8}${nb.realGrade.grade?` → MYP grade ${nb.realGrade.grade}/7`:""}. Sage now marks you like your teacher.`);vSpell()
+}
+/* a 0-8 level picker (the desktop app can't show the browser's prompt() box) */
+function levelPicker(title,sub,bands,predicted,onPick){
+  const old=document.getElementById("lvpick");if(old)old.remove();
+  const e=document.createElement("div");e.id="lvpick";e.style.cssText="position:fixed;inset:0;background:#000c;z-index:40;display:grid;place-items:center;padding:16px;overflow:auto";
+  const bandOfLv=lv=>lv===0?"":lv<=2?"1-2":lv<=4?"3-4":lv<=6?"5-6":"7-8";
+  e.innerHTML=`<div class="glass" style="max-width:640px;width:100%"><b style="font-size:18px">${title}</b><div class="mu" style="margin:6px 0 10px">${sub}</div>
+    <div class="row" style="justify-content:flex-start;gap:6px;flex-wrap:wrap">${[0,1,2,3,4,5,6,7,8].map(l=>`<button class="${l===predicted?"gold":"alt"}" style="min-width:44px" data-lv="${l}">${l}</button>`).join("")}</div>
+    <div class="mu" id="lvdesc" style="margin-top:10px;min-height:40px">Tap a level to see what it means, then tap it again to save.</div>
+    <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="alt" id="lvcancel">Cancel</button></div></div>`;
+  document.body.appendChild(e);let picked=null;
+  e.querySelector("#lvcancel").onclick=()=>e.remove();
+  e.querySelectorAll("[data-lv]").forEach(b=>b.onclick=()=>{const lv=+b.dataset.lv;
+    if(picked===lv){e.remove();onPick(lv);return}
+    picked=lv;e.querySelectorAll("[data-lv]").forEach(x=>x.className=+x.dataset.lv===lv?"gold":"alt");
+    const bd=bandOfLv(lv);e.querySelector("#lvdesc").innerHTML=lv===0?"<b>0</b> — the work doesn't reach any descriptor.":`<b>Level ${lv} (band ${bd})</b> — ${(bands&&bands[bd]||[]).map(x=>"• "+esc(x)).join("<br>")}<br><b>Tap ${lv} again to save.</b>`})
 }
 /* ---------- recording what you actually got ---------- */
 function recordReal(nbId,crit,predicted){
   const nb=NBS().find(d=>d.id===nbId);if(!nb)return;
   const c=(nb.criteria||[]).find(x=>String(x.id).toUpperCase()===String(crit).toUpperCase());
-  const raw=prompt(`What level did your teacher actually give you for Criterion ${crit}${c?" ("+c.name+")":""}?\n\n0 to 8. Leave blank to cancel.${typeof predicted==="number"?"\n\nThis app predicted "+predicted+".":""}`,"");
-  if(raw===null||!String(raw).trim())return;
-  const lv=Math.max(0,Math.min(8,Math.round(parseFloat(raw))));
+  if(typeof predicted!=="number"&&S.pred&&S.pred[nbId]&&typeof S.pred[nbId][String(crit).toUpperCase()]==="number")predicted=S.pred[nbId][String(crit).toUpperCase()];
+  levelPicker(`What level did your teacher give you for Criterion ${esc(crit)}${c?" — "+esc(c.name):""}?`,typeof predicted==="number"?`Sage predicted <b>${predicted}</b>. Your real level teaches Sage to mark you like your teacher does.`:"Your real level teaches Sage to mark you like your teacher does.",c?mypBands(nb,c):null,typeof predicted==="number"?predicted:null,lv=>recordRealSave(nbId,crit,lv,predicted))
+}
+function recordRealSave(nbId,crit,lv,predicted,quiet){
+  const nb=NBS().find(d=>d.id===nbId);if(!nb)return;
   if(!isFinite(lv))return toast("That wasn't a number between 0 and 8");
   realLog().push({nb:nbId,name:nb.name,fw:nb.fw||"none",crit:String(crit).toUpperCase(),
                   level:lv,predicted:typeof predicted==="number"?predicted:null,when:Date.now()});
   save();
-  if(typeof predicted==="number"){
+  if(typeof predicted==="number"&&!quiet){
     const d=lv-predicted;
     toast(d===0?`✅ Dead on — I predicted ${predicted}, you got ${lv}`
         :d<0?`📉 I was ${Math.abs(d)} level${Math.abs(d)>1?"s":""} generous — marking harder from now on`
              :`📈 I was ${d} level${d>1?"s":""} harsh — I'll stop underselling you`);
-  }else toast("Recorded");
-  render()
+  }else if(!quiet)toast("Recorded");
+  if(!quiet)render()
 }
 function forgetReal(i){const r=realLog();if(i<0||i>=r.length)return;if(!confirm("Delete this recorded result?"))return;r.splice(i,1);save();render()}
 
@@ -3320,12 +3417,14 @@ function roadTo7(p){
   const nb=NBS().find(d=>d.id===p.id),crits=(nb&&nb.criteria)||[],by=p.byCrit||{},single=p.crit!=="ALL";
   const ids=single?[p.crit]:Object.keys(by);if(!ids.length)return"";
   const rowsOf=id=>(p.rows||[]).filter(q=>single||String(q.crit||"").toUpperCase()===id);
-  const lvlOf=id=>{const v=by[id];const pc=v&&v.max?v.got/v.max*100:p.pct;return Math.max(0,Math.min(8,Math.round(pc/100*8)))};
+  const lvlOf=id=>{if(p.levels&&p.levels[id])return p.levels[id].level;const v=by[id];const pc=v&&v.max?v.got/v.max*100:p.pct;return Math.max(0,Math.min(8,Math.round(pc/100*8)))};
   const blocks=ids.map(id=>{const c=crits.find(x=>x.id===id)||{id,name:""},lv=lvlOf(id),strands=(GUIDE[nb&&nb.fw]||{})[id]||[c.desc||""];
-    const lost=rowsOf(id).filter(q=>q.awarded<q.marks).sort((a,b)=>(b.marks-b.awarded)-(a.marks-a.awarded)).slice(0,3);
+    const lost=rowsOf(id).filter(q=>q.awarded<q.marks).sort((a,b)=>(b.marks-b.awarded)-(a.marks-a.awarded)).slice(0,3),L1=(p.levels||{})[id]||{};
+    const ev=(L1.strands||[]).length?`<div style="margin-top:8px"><b>Strand by strand (from your answers)</b>${L1.strands.map(x=>`<div class="mu" style="margin-top:4px">• <b>${esc(x.strand||"")}</b> — band ${esc(x.band||"?")}${x.evidence?` · you wrote: <i>“${esc(String(x.evidence).slice(0,140))}”</i>`:""}${x.next?`<br><span style="opacity:.9">➜ ${esc(x.next)}</span>`:""}</div>`).join("")}</div>`:"";
+    const sm=L1.summary?`<div class="mu" style="margin-top:6px">${esc(L1.summary)}</div>`:"",nx=L1.to_next?`<div style="margin-top:6px">🎯 <b>To reach the next band:</b> ${esc(L1.to_next)}</div>`:"";
     return`<div class="glass" style="margin:8px 0"><div class="row"><b>Criterion ${esc(id)}${c.name?" — "+esc(c.name):""}</b><span class="pill">≈ level ${lv}/8 · ${esc(bandOf(lv))}</span></div>
       ${lv>=7?`<div class="mu" style="margin-top:6px">✅ Top band on this paper. Keep it there: next time, try the next level up or a harder context.</div>`:
-      `<div class="mu" style="margin-top:6px"><b>A 7–8 here means doing all of these consistently and thoroughly:</b><br>${strands.map(x=>"• "+esc(x)).join("<br>")}</div>
+      `${sm}${nx}${ev}<div class="mu" style="margin-top:6px"><b>A 7–8 here (${esc(yearLbl(gradeOf(nb)))} descriptor) means:</b><br>${((nb&&mypBands(nb,c)["7-8"])||strands).map(x=>"• "+esc(x)).join("<br>")}</div>
        ${lost.length?`<div style="margin-top:8px"><b>Where the marks went</b>${lost.map(q=>`<div class="mu" style="margin-top:6px">• <b>${esc(String(q.prompt||"").replace(/[#*_]/g,"").slice(0,110))}</b> — ${q.awarded}/${q.marks}${(q.model||q.model_answer)?`<br><span style="opacity:.85">A full-mark answer: ${esc(String(q.model||q.model_answer).slice(0,240))}${String(q.model||q.model_answer).length>240?"…":""}</span>`:""}</div>`).join("")}</div>`:""}`}</div>`});
   const weak=ids.slice().sort((a,b)=>lvlOf(a)-lvlOf(b))[0],wl=lvlOf(weak);
   return`<h2>🏆 Road to a 7</h2>${blocks.join("")}
@@ -3336,12 +3435,13 @@ function vPResult(){
   const p=S.lastPaper;if(!p)return go("map");const lv=Math.min(8,Math.round(p.pct/100*8)),myp=(p.fw||"").length&&p.fw!=="custom"&&p.fw!=="none";
   app.innerHTML=`<section class="result ${p.pct>=60?"win":"lose"}"><div class="res-banner">${p.pct>=60?"Boss defeated":"The paper won"}</div>
    <div class="res-sub">${esc(p.name)} · ${p.crit==="ALL"?"Full paper — all criteria":"Criterion "+esc(p.crit)+" ("+esc(p.cname)+")"} · Lv ${p.lvl}</div>${Object.keys(p.byCrit||{}).length?`<div class="row" style="justify-content:center;gap:6px;margin-top:6px">${Object.entries(p.byCrit).map(([k,v])=>`<span class="pill">${esc(k)}: ${v.got}/${v.max}</span>`).join("")}</div>`:""}
+   ${p.levels&&Object.keys(p.levels).length?`<div class="row" style="justify-content:center;gap:6px;margin-top:8px">${Object.entries(p.levels).map(([k,v])=>`<span class="pill" title="${v.method==="descriptors"?"best fit against the IB level descriptors":"estimated from marks (the descriptor check didn't come back)"}">Crit ${esc(k)}: <b>${v.level}/8</b> · ${esc(bandOf(v.level))}</span>`).join("")}</div>`:""}
    ${p.unmarked?`<div class="glass" style="border-color:var(--gold);margin:10px auto;max-width:620px"><b>⚠️ ${p.unmarked} of ${p.total} question${p.unmarked>1?"s":""} couldn't be marked</b>
      <div class="mu">The examiner's reply came back unreadable for ${p.unmarked>1?"those":"that one"}. ${p.unmarked>1?"They are":"It is"} left OUT of your score rather than counted wrong, so the mark below is out of what was actually marked.${p.unmarked>Math.max(1,Math.floor(p.total*0.25))?" Too much is missing for this to count toward your difficulty or calibration — mark it again for a real score.":""}</div></div>`:""}
    <div class="bigscore"><span data-count="${p.got}">0</span><span class="mu" style="font-size:.45em"> / ${p.max}</span></div>
    <div><span class="pill" style="font-size:18px"><span data-count="${p.pct}" data-suf="%">0%</span></span> ${myp?(()=>{
-     const L=levelFor(p.pct,p.fw,p.crit==="ALL"?"":p.crit);
-     const shown=p.yr>5?"grade "+gradeFromPct(p.pct,p.yr)+" / 7":"level "+L.level+" / 8";
+     const L=levelFor(p.pct,p.fw,p.crit==="ALL"?"":p.crit),lv1=p.levels&&p.crit!=="ALL"&&p.levels[p.crit];
+     const shown=p.yr>5?"grade "+gradeFromPct(p.pct,p.yr)+" / 7":p.overall?"MYP grade "+p.overall.grade+" / 7 ("+p.overall.total+"/32)":lv1?"level "+lv1.level+" / 8":"level "+L.level+" / 8";
      return `<span class="pill" style="font-size:18px">≈ ${shown}</span>`+
        (L.n?`<span class="pill" title="corrected using ${L.n} real result(s) you recorded" style="color:var(--good)">calibrated ×${L.n}</span>`
            :`<span class="pill" title="nothing has checked this against a real grade yet" style="color:var(--gold)">uncalibrated — a guess</span>`)})():""}</div>
@@ -3353,7 +3453,7 @@ function vPResult(){
      if(s.band==="stretch")return`<div class="glass" style="border-color:var(--bad);margin-top:12px"><b>🔥 Papers are getting harder</b><div class="mu">You are averaging ${s.avg}% at this level, so the next one comes back tougher — less scaffolding, less familiar contexts, more justification. The aim is that the real exam is the easiest paper you have sat in weeks.</div></div>`;
      if(s.band==="support")return`<div class="glass" style="border-color:var(--gold);margin-top:12px"><b>🪜 Easing the way in</b><div class="mu">You are averaging ${s.avg}% here, so the next paper breaks the big questions into steps and puts familiar contexts first. The standard for a top-band answer does not move — only the way in.</div></div>`;
      return""})()}
-   ${myp&&p.crit!=="ALL"?`<div class="row" style="justify-content:center;margin-top:10px"><button class="alt" onclick="recordReal('${p.id}','${esc(p.crit)}',${Math.max(0,Math.min(8,Math.round(p.pct/100*8)))})">🎯 Got this back from your teacher? Tell me the real level</button></div>`:""}</section>
+   ${myp&&p.crit!=="ALL"?`<div class="row" style="justify-content:center;margin-top:10px"><button class="alt" onclick="recordReal('${p.id}','${esc(p.crit)}',${p.levels&&p.levels[p.crit]?p.levels[p.crit].level:Math.max(0,Math.min(8,Math.round(p.pct/100*8)))})">🎯 Got this back from your teacher? Tell me the real level</button></div>`:""}</section>
   ${myp?roadTo7(p):""}
   <div class="grid g2"><div class="glass"><b>💪 Strengths</b><div class="mu">${(p.strengths||[]).map(x=>"• "+esc(x)).join("<br>")||"—"}</div></div><div class="glass"><b>🎯 To improve</b><div class="mu">${(p.improvements||[]).map(x=>"• "+esc(x)).join("<br>")||"—"}</div></div></div>
   <h2>Question by question</h2>${p.rows.map(q=>`<div class="glass"><div class="row" style="align-items:flex-start;flex-wrap:nowrap"><b style="flex:1">${md(q.prompt)}</b><span class="pill" style="color:${q.awarded>=q.marks?"var(--good)":q.awarded?"var(--gold)":"var(--bad)"}">${q.awarded}/${q.marks}</span></div>
@@ -3426,6 +3526,7 @@ function vSpell(){
   <h2>📋 Syllabus <span class="pill">optional</span></h2><div class="glass"><div class="mu" style="margin-bottom:6px">${nb.syllabus?`Papers, spells and the plan use this syllabus together with your notes${(nb.syllabus.names||[]).length?" ("+(nb.syllabus.names||[]).map(esc).join(", ")+")":""}. Clear it to go back to notes only.`:"No syllabus — papers are built from your notes alone. Add one (photo, PDF, Word or text) and they adapt to it."}</div>
    <textarea rows="${nb.syllabus?8:3}" placeholder="Paste or type the syllabus topics…" oninput="sylSave('${nb.id}',this.value)">${esc((nb.syllabus||{}).text||"")}</textarea>
    <div class="row" style="justify-content:flex-start;margin-top:8px">${sylBox(nb.id)}</div></div>
+  ${realGradesPanel(nb,dl)}
   <h2>📄 Past papers &amp; recordings <span class="pill">optional</span></h2>${patSection(nb)}
   <h2>📓 Linked notebooks</h2><div class="mu" style="margin-bottom:6px">Tell the spellbook which criteria each notebook feeds — only criteria assigned to at least one notebook get a paper section, and a paper for Criterion A is built only from notebooks assigned to A.</div><div class="glass">${nbs.length?nbs.map(n=>{const on=(nb.links||[]).includes(n.id),cr=(nb.linkCrit||{})[n.id]||[];return`<div style="margin:8px 0"><label class="row" style="justify-content:flex-start"><input type="checkbox" style="width:auto" ${on?"checked":""} onchange="spLink('${nb.id}','${n.id}',this.checked)"> ${n.emoji||"📓"} <b>${esc(n.name)}</b> <span class="mu">${n.cards.length} cards</span></label>${on?`<div class="row" style="justify-content:flex-start;margin:4px 0 0 26px;gap:6px">${(nb.criteria||[]).map(c=>`<button class="${cr.includes(c.id)?"":"alt"}" style="padding:3px 10px;font-size:13px" onclick="spCrit('${nb.id}','${n.id}','${esc(c.id)}',${!cr.includes(c.id)})">${esc(c.id)}</button>`).join("")}<span class="mu">${cr.length?"feeds "+cr.join(", "):"pick criteria — unpicked ones are hidden from papers"}</span></div>`:""}</div>`}).join(""):'<div class="mu">No notebooks yet.</div>'}</div>
   <div class="glass row"><button class="alt" onclick="staged=[];go('nb','${nb.id}')">✏️ Own notes, cards & criteria</button><button class="alt" onclick="askDelete('${nb.id}','books')">🗑 Delete</button></div>`
