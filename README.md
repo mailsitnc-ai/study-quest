@@ -35,6 +35,15 @@ Download the file for your laptop from **[Releases](https://github.com/mailsitnc
   ```
 - **Linux:** `tar -xzf Study-Quest-Linux-x64.tar.gz`, then run `./study-quest` inside the folder.
 
+### Updating
+
+Your progress, notebooks, spellbooks, past papers and API keys are stored separately from the app, so
+**updating never loses anything.**
+
+- **Desktop app:** when a new version is out, an **⬆️ Update** button appears in the top bar (or go to
+  **Hero → Updates → Check for updates**). One click saves a backup and updates in place, with no reinstall.
+- **Browser version:** it's always the latest; just reload the page.
+
 ## The AI tutor (Sage)
 
 Sage writes your cards and papers using **your own** free AI keys. Never share keys with anyone.

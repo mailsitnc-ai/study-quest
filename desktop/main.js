@@ -1,17 +1,52 @@
 // Study Quest — desktop shell. Loads the game from ./app/index.html in a normal window.
-const { app, BrowserWindow, Menu, shell, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, shell, nativeTheme, ipcMain, net } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
 app.setName("Study Quest");
+if (process.env.SQ_USERDATA) app.setPath("userData", process.env.SQ_USERDATA);   // tests only: a separate data folder
 nativeTheme.themeSource = "dark";
 app.setAboutPanelOptions({
   applicationName: "Study Quest",
-  applicationVersion: "1.0.0",
+  applicationVersion: require("./package.json").version,
   copyright: "Turn your notes into a game and ace your exams."
 });
 
 if (!app.requestSingleInstanceLock()) app.quit();
+
+// ---- in-app updates: the whole game is index.html + decks.js, so "Update" downloads the newest copies from the
+// game's website into the user-data folder and loads them. Progress and keys are stored separately (localStorage)
+// and are never touched; a backup is written first. If an update ever fails to start, the built-in copy is used.
+const UPDATE_BASE = process.env.SQ_UPDATE_BASE || "https://mailsitnc-ai.github.io/study-quest/";   // env override for tests only
+const bundledGame = () => path.join(__dirname, "app", "index.html");
+const updatedDir = () => path.join(app.getPath("userData"), "game");
+const updatedGame = () => path.join(updatedDir(), "index.html");
+const verOf = (html) => (String(html).match(/<meta name="sq-version" content="([\d.]+)"/) || [])[1] || "0";
+const verFile = (f) => { try { return verOf(fs.readFileSync(f, "utf8")); } catch (e) { return "0"; } };
+const newer = (a, b) => { const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+let usingUpdate = false;
+function gameFile() {
+  try { if (fs.existsSync(updatedGame()) && !newer(verFile(bundledGame()), verFile(updatedGame()))) return (usingUpdate = true, updatedGame()); } catch (e) {}
+  usingUpdate = false; return bundledGame();
+}
+async function fetchText(url) { const r = await net.fetch(url + (url.includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" }); if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); }
+ipcMain.handle("sq:info", () => ({ version: verFile(usingUpdate ? updatedGame() : bundledGame()), builtIn: verFile(bundledGame()), updated: usingUpdate, platform: process.platform }));
+ipcMain.handle("sq:check", async () => {
+  const current = verFile(usingUpdate ? updatedGame() : bundledGame());
+  try { const latest = String(JSON.parse(await fetchText(UPDATE_BASE + "version.json")).version || "0"); return { current, latest, available: newer(latest, current) }; }
+  catch (e) { return { current, error: "Couldn't reach the update server — are you online?" }; }
+});
+ipcMain.handle("sq:update", async () => {
+  try {
+    const [html, decks] = await Promise.all([fetchText(UPDATE_BASE + "index.html"), fetchText(UPDATE_BASE + "decks.js")]);
+    if (!/function go\(/.test(html) || verOf(html) === "0") throw new Error("the download looked incomplete");
+    await backup();                                   // a save copy first, just in case
+    fs.mkdirSync(updatedDir(), { recursive: true });
+    for (const [name, body] of [["decks.js", decks], ["index.html", html]]) { const f = path.join(updatedDir(), name); fs.writeFileSync(f + ".new", body); fs.renameSync(f + ".new", f); }
+    setTimeout(() => { if (win && !win.isDestroyed()) win.loadFile(gameFile()); }, 300);
+    return { ok: true, version: verOf(html) };
+  } catch (e) { return { ok: false, error: "Update failed: " + e.message + ". Nothing was changed." }; }
+});
 
 let win;
 const isMac = process.platform === "darwin";
@@ -27,10 +62,18 @@ function createWindow() {
     ...(isMac ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 18, y: 24 } } : { autoHideMenuBar: true }),
     icon: isMac ? undefined : path.join(__dirname, "icon.png"),
     show: false,
-    webPreferences: { spellcheck: false, backgroundThrottling: false }
+    webPreferences: { spellcheck: false, backgroundThrottling: false, preload: path.join(__dirname, "preload.js") }
   });
   win.once("ready-to-show", () => win.show());
-  win.loadFile(path.join(__dirname, "app", "index.html"));
+  win.loadFile(gameFile());
+  // safety net: if an updated game ever fails to start, go back to the built-in copy (the update is set aside)
+  win.webContents.on("did-finish-load", () => {
+    if (!usingUpdate) return;
+    setTimeout(async () => {
+      let ok = false; try { ok = await win.webContents.executeJavaScript("typeof go==='function'"); } catch (e) {}
+      if (!ok) { try { fs.renameSync(updatedGame(), updatedGame() + ".broken"); } catch (e) {} usingUpdate = false; win.loadFile(bundledGame()); }
+    }, 4000);
+  });
 
   // links (e.g. "open AI Studio") go to the real browser, never inside the game window
   win.webContents.setWindowOpenHandler(({ url }) => {

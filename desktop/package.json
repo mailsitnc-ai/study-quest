@@ -1,7 +1,7 @@
 {
   "name": "study-quest",
   "productName": "Study Quest",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Study Quest \u2014 turn your notes into an RPG and prep for exams and summatives.",
   "main": "main.js",
   "private": true,
