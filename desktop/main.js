@@ -197,6 +197,10 @@ app.whenReady().then(() => {
   const oll = { urls: ["http://localhost:11434/*", "http://127.0.0.1:11434/*"] };
   const ses = require("electron").session.defaultSession;
   ses.webRequest.onBeforeSendHeaders(oll, (d, cb) => { const h = d.requestHeaders; delete h.Origin; delete h.origin; cb({ requestHeaders: h }); });
+  // videos: let the page read YouTube search results, and give embedded players the Referer they require (a file:// page sends none)
+  const yts = { urls: ["https://www.youtube.com/*", "https://www.youtube-nocookie.com/*"] };
+  ses.webRequest.onBeforeSendHeaders(yts, (d, cb) => { const h = d.requestHeaders; delete h.Origin; delete h.origin; h["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"; for (const k of Object.keys(h)) if (/^sec-ch-ua|^sec-fetch-|^referer$/i.test(k) && d.resourceType !== "subFrame") delete h[k]; h["Accept-Language"] = "en-US,en;q=0.9"; if (d.resourceType === "subFrame" || /\/embed\//.test(d.url)) h.Referer = "https://studyquest.app/"; cb({ requestHeaders: h }); });
+  ses.webRequest.onHeadersReceived({ urls: ["https://www.youtube.com/results*"] }, (d, cb) => { const h = d.responseHeaders || {}; h["Access-Control-Allow-Origin"] = ["*"]; cb({ responseHeaders: h }); });
   ses.webRequest.onHeadersReceived(oll, (d, cb) => { const h = d.responseHeaders || {}; h["Access-Control-Allow-Origin"] = ["*"]; h["Access-Control-Allow-Headers"] = ["*"]; h["Access-Control-Allow-Methods"] = ["GET, POST, OPTIONS"]; cb({ responseHeaders: h, statusLine: d.method === "OPTIONS" ? "HTTP/1.1 204 No Content" : d.statusLine }); });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(isMac ? [{ role: "appMenu" }] : []),
